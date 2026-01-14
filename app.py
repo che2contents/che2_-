@@ -4,16 +4,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
 import requests
 import streamlit as st
 
-banner_path = Path(__file__).parent / "assets" / "banner.jpg"
-
-if banner_path.exists():
-    st.image(str(banner_path), use_container_width=True)
-else:
-    st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
 
 # =========================================================
 # 기본 설정
