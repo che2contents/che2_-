@@ -2,22 +2,25 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
 
 # =========================================================
-# 0) 기본 설정
+# 기본 설정
 # =========================================================
 st.set_page_config(page_title="인천제2교회 성경읽기표", layout="wide")
 
 YOUTUBE_URL = "https://www.youtube.com/@%EC%9D%B8%EC%B2%9C%EC%A0%9C2%EA%B5%90%ED%9A%8C-che2"
 
-# ✅ 권별 JSON 폴더 (사용)
-BIBLE_BOOKS_DIR = st.secrets.get("GITHUB_BIBLE_BOOKS_DIR", "bible_books_json")
+# ✅ repo 안에 포함된 bible_books_json 폴더를 기본으로 사용
+# (로컬 파일이 없을 때만 GitHub Raw로 fallback)
+LOCAL_BIBLE_BOOKS_DIR = Path("bible_books_json")
 
-# GitHub Raw 로딩을 위한 정보 (public repo면 토큰 없어도 됨)
+# (선택) GitHub Raw fallback (public repo면 토큰 없어도 됨)
+BIBLE_BOOKS_DIR = st.secrets.get("GITHUB_BIBLE_BOOKS_DIR", "bible_books_json")
 GITHUB_OWNER = st.secrets.get("GITHUB_OWNER", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 GITHUB_BRANCH = st.secrets.get("GITHUB_BRANCH", "main")
@@ -53,7 +56,7 @@ CHAPTER_COUNT = {
 BOOK_ORDER = list(CHAPTER_COUNT.keys())
 
 # =========================================================
-# 1) 스타일(명조) + 배너
+# 스타일(명조) + 배너
 # =========================================================
 st.markdown(
     """
@@ -69,116 +72,47 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# 배너 (assets/banner.jpg)
 try:
     st.markdown('<div class="banner-wrap">', unsafe_allow_html=True)
     st.image("assets/banner.jpg", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 except Exception:
-    st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
+    st.warning("1) assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
 
 st.title("성경읽기표 (2월~12월 · 월~토 5장 · 주일 영상)")
-st.caption("bible_books_json에서 본문 로드 · 로그인 없이 개인코드 + 백업/복원")
+st.caption("프로토타입: 코드 입력/백업 기능 숨김 · 바로 사용 가능")
+
+st.info(
+    "📌 사용 방법\n"
+    "- 날짜를 선택하면 그날 읽을 5장이 자동으로 나옵니다.\n"
+    "- [📖 성경 읽기] 버튼을 누르면 본문이 로드됩니다.\n"
+    "- 주일은 유튜브 영상만 시청합니다."
+)
 
 # =========================================================
-# 2) 개인코드 + 내보내기/가져오기(백업)
+# 진행 상태(프로토타입: 세션에만 저장)
 # =========================================================
-def norm_code(s: str) -> str:
-    return (s or "").strip()
-
-def default_progress(code: str) -> Dict[str, Any]:
-    return {
-        "version": 1,
-        "code": code,
-        "createdAt": datetime.now().isoformat(timespec="seconds"),
-        "updatedAt": datetime.now().isoformat(timespec="seconds"),
-        "checked": {},   # { "gen:001": true, ... }  (장 단위 체크)
-    }
+if "checked" not in st.session_state:
+    st.session_state.checked: Dict[str, bool] = {}  # {"gen:001": True, ...}
+if "selected_reading" not in st.session_state:
+    st.session_state.selected_reading: Optional[List[Tuple[str, int]]] = None
 
 def key_for(book_name: str, chapter: int) -> str:
-    book_code = BOOKS.get(book_name, book_name)
-    return f"{book_code}:{chapter:03d}"
-
-if "active_code" not in st.session_state:
-    st.session_state.active_code = ""
-if "progress" not in st.session_state:
-    st.session_state.progress = None
-if "selected_day" not in st.session_state:
-    st.session_state.selected_day = None  # date
-if "selected_reading" not in st.session_state:
-    st.session_state.selected_reading = None  # List[(book, ch)]
-
-st.markdown('<div class="card">', unsafe_allow_html=True)
-c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-code_in = c1.text_input("개인코드", value=st.session_state.active_code, placeholder="예: ABCD-1234")
-
-if c2.button("코드 적용", use_container_width=True):
-    cc = norm_code(code_in)
-    if not cc:
-        st.error("개인코드를 입력하세요.")
-    else:
-        st.session_state.active_code = cc
-        st.session_state.progress = default_progress(cc)
-        st.success("코드 적용 완료!")
-
-if st.session_state.progress and st.session_state.active_code:
-    payload = dict(st.session_state.progress)
-    payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
-    export_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-
-    c3.download_button(
-        "⬇️ 내보내기(백업)",
-        data=export_bytes,
-        file_name=f"성경읽기표_{st.session_state.active_code}_backup.json",
-        mime="application/json",
-        use_container_width=True
-    )
-
-uploaded = c4.file_uploader("⬆️ 가져오기", type=["json"], label_visibility="collapsed")
-if uploaded is not None:
-    try:
-        obj = json.loads(uploaded.read().decode("utf-8"))
-        cc = norm_code(code_in)
-        if not cc:
-            st.error("먼저 개인코드를 입력한 뒤 업로드하세요(코드 확인용).")
-        elif obj.get("code") != cc:
-            st.error("업로드 파일의 코드와 현재 개인코드가 다릅니다.")
-        else:
-            st.session_state.active_code = cc
-            st.session_state.progress = obj
-            st.success("복원 완료! 진행상황을 불러왔습니다.")
-    except Exception as e:
-        st.error(f"업로드 실패: {e}")
-
-if st.session_state.progress and st.button("초기화(현재 코드 체크 전부 해제)"):
-    cc = st.session_state.active_code
-    st.session_state.progress = default_progress(cc)
-    st.success("초기화 완료")
-
-st.markdown(
-    '<div class="muted">• 기기 변경 시: 기존 폰에서 <b>내보내기</b> → 새 폰에서 <b>가져오기</b><br/>'
-    '• 서버 저장이 없어서, 백업 없이 폰을 잃어버리면 복구가 어렵습니다.</div>',
-    unsafe_allow_html=True
-)
-st.markdown("</div>", unsafe_allow_html=True)
-
-if not st.session_state.progress:
-    st.info("상단에서 개인코드를 입력하고 ‘코드 적용’을 눌러주세요.")
-    st.stop()
-
-checked_map: Dict[str, bool] = st.session_state.progress.get("checked", {})
+    return f"{BOOKS.get(book_name, book_name)}:{chapter:03d}"
 
 # =========================================================
-# 3) 스케줄 생성 (2월~12월, 주일=영상 / 월~토=5장)
+# 2월~12월 스케줄 생성 (주일 제외, 월~토 하루 5장)
 # =========================================================
 @dataclass
 class ReadingDay:
     d: date
     is_sunday: bool
-    chapters: List[Tuple[str, int]]  # [(book_name, chapter), ...] length=5 for weekdays, [] for sunday
+    chapters: List[Tuple[str, int]]
     label: str
 
 def iter_bible_chapters() -> List[Tuple[str, int]]:
-    out = []
+    out: List[Tuple[str, int]] = []
     for book in BOOK_ORDER:
         for ch in range(1, CHAPTER_COUNT[book] + 1):
             out.append((book, ch))
@@ -190,60 +124,55 @@ def build_schedule(year: int) -> List[ReadingDay]:
     start = date(year, 2, 1)
     end = date(year, 12, 31)
 
-    # 날짜 목록
     days: List[date] = []
     cur = start
     while cur <= end:
         days.append(cur)
         cur += timedelta(days=1)
 
-    # 주일 제외한 "읽는 날" 개수
-    reading_dates = [d for d in days if d.weekday() != 6]  # Python: 월0 ... 일6
-    # 하루 5장씩 할당
     idx = 0
     schedule: List[ReadingDay] = []
 
     for d in days:
-        is_sun = (d.weekday() == 6)
+        is_sun = (d.weekday() == 6)  # 일요일
         if is_sun:
             schedule.append(ReadingDay(d=d, is_sunday=True, chapters=[], label="주일: 영상 시청"))
             continue
 
-        # 5장 뽑기 (성경 끝나면 남는 날은 빈칸 처리)
         todays: List[Tuple[str, int]] = []
         for _ in range(5):
             if idx < len(ALL_CHAPTERS):
                 todays.append(ALL_CHAPTERS[idx])
                 idx += 1
+
         if todays:
-            # 라벨: "창세기 1장 ~ 5장" 같은 형태로 묶어 표기 (연속일 때만 보기 좋게)
             b1, c1 = todays[0]
             b2, c2 = todays[-1]
-            if b1 == b2:
-                label = f"{b1} {c1}–{c2}장"
-            else:
-                label = f"{b1} {c1}장 ~ {b2} {c2}장"
+            label = f"{b1} {c1}–{c2}장" if b1 == b2 else f"{b1} {c1}장 ~ {b2} {c2}장"
         else:
             label = "완독 이후(읽기 없음)"
         schedule.append(ReadingDay(d=d, is_sunday=False, chapters=todays, label=label))
 
     return schedule
 
-# 연도 선택(배포용)
-today = date.today()
-default_year = today.year
-year = st.sidebar.selectbox("연도", [default_year - 1, default_year, default_year + 1], index=1)
-
-schedule = build_schedule(year)
-
 # =========================================================
-# 4) GitHub에서 bible_books_json/{book_code}.json 로드
+# 본문 로드 (1) 로컬 파일 우선 (2) GitHub Raw fallback
 # =========================================================
+@st.cache_data(show_spinner=False)
+def load_book_json_local(book_code: str) -> Optional[Dict[str, Any]]:
+    fp = LOCAL_BIBLE_BOOKS_DIR / f"{book_code}.json"
+    if not fp.exists():
+        return None
+    try:
+        return json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
 def github_raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
 
 @st.cache_data(show_spinner=False)
-def fetch_book_json(book_code: str) -> Optional[Dict[str, Any]]:
+def load_book_json_github(book_code: str) -> Optional[Dict[str, Any]]:
     if not (GITHUB_OWNER and GITHUB_REPO):
         return None
     url = github_raw_url(f"{BIBLE_BOOKS_DIR}/{book_code}.json")
@@ -269,13 +198,7 @@ def sort_verse_items(d: Dict[Any, Any]) -> List[Tuple[str, Any]]:
         pass
     return items
 
-def get_chapter_from_book_json(book_json: Dict[str, Any], chapter: int) -> Optional[Any]:
-    """
-    가능한 구조들을 넓게 지원:
-    - book_json["chapters"]["1"]
-    - book_json["1"]
-    - book_json["data"]["1"]
-    """
+def get_chapter_node(book_json: Dict[str, Any], chapter: int) -> Optional[Any]:
     ch_key = str(chapter)
     candidates = [
         ("chapters", ch_key),
@@ -284,155 +207,132 @@ def get_chapter_from_book_json(book_json: Dict[str, Any], chapter: int) -> Optio
     ]
     for root, ck in candidates:
         try:
-            node = book_json[ck] if root is None else book_json[root][ck]
-            return node
+            return book_json[ck] if root is None else book_json[root][ck]
         except Exception:
             continue
     return None
 
 def chapter_to_text(node: Any) -> str:
-    """
-    node가 string/list/dict 등 어떤 형태든 보기 좋게 변환
-    """
     if node is None:
         return ""
     if isinstance(node, str):
         return node
     if isinstance(node, list):
-        # [ "1절 ...", "2절 ..."] 또는 [{"v":1,"t":"..."}] 같은 경우도 대비
         lines = []
         for i, v in enumerate(node, start=1):
             if isinstance(v, str):
                 lines.append(v)
             elif isinstance(v, dict):
-                # 흔한 키 후보
                 vv = v.get("v") or v.get("verse") or i
                 tt = v.get("t") or v.get("text") or json.dumps(v, ensure_ascii=False)
                 lines.append(f"{vv}. {tt}")
             else:
                 lines.append(str(v))
         return "\n".join(lines)
-
     if isinstance(node, dict):
-        # dict of verses: {"1":"...", "2":"..."} or {"verses": {...}}
         if "text" in node and isinstance(node["text"], str):
             return node["text"]
         if "verses" in node and isinstance(node["verses"], (dict, list, str)):
             return chapter_to_text(node["verses"])
         items = sort_verse_items(node)
         return "\n".join([f"{k}. {v}" for k, v in items])
-
     return str(node)
 
 def load_chapter_text(book_name: str, chapter: int) -> Optional[str]:
     book_code = BOOKS.get(book_name)
     if not book_code:
         return None
-    book_json = fetch_book_json(book_code)
-    if not book_json:
+
+    # 1) 로컬
+    bj = load_book_json_local(book_code)
+    # 2) GitHub fallback
+    if bj is None:
+        bj = load_book_json_github(book_code)
+    if bj is None:
         return None
-    node = get_chapter_from_book_json(book_json, chapter)
+
+    node = get_chapter_node(bj, chapter)
     if node is None:
         return None
     text = chapter_to_text(node)
     return text if text.strip() else None
 
 # =========================================================
-# 5) UI: 날짜별 표 + 읽기 버튼 + 체크 + 본문 표시
+# 메인 UI: 바로 읽기표 사용
 # =========================================================
+today = date.today()
+year = st.sidebar.selectbox("연도", [today.year - 1, today.year, today.year + 1], index=1)
+
+schedule = build_schedule(year)
+min_day = date(year, 2, 1)
+max_day = date(year, 12, 31)
+default_day = today if (min_day <= today <= max_day) else min_day
+
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("주일 영상")
 st.link_button("▶️ 주일 유튜브 시청하기", YOUTUBE_URL)
 st.markdown("</div>", unsafe_allow_html=True)
 
-# 선택된 날짜(기본: 오늘이 기간 안이면 오늘, 아니면 2/1)
-min_day = date(year, 2, 1)
-max_day = date(year, 12, 31)
-default_day = today if (min_day <= today <= max_day) else min_day
-
-sel = st.date_input("날짜 선택", value=default_day, min_value=min_day, max_value=max_day)
-st.session_state.selected_day = sel
-
-# 해당 날짜 찾기
-day_obj = next((x for x in schedule if x.d == sel), None)
-
-# 상단 요약
-total_chapters = len(ALL_CHAPTERS)  # 1189
-done_chapters = sum(1 for k, v in checked_map.items() if v)
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown(f"### 진행 현황")
-st.markdown(f"- 체크한 장: **{done_chapters} / {total_chapters}장**")
-st.progress(min(1.0, done_chapters / total_chapters))
-st.markdown("</div>", unsafe_allow_html=True)
-
+sel_day = st.date_input("날짜 선택", value=default_day, min_value=min_day, max_value=max_day)
+day_obj = next((x for x in schedule if x.d == sel_day), None)
 if not day_obj:
     st.error("선택한 날짜 데이터를 찾지 못했습니다.")
     st.stop()
 
-# 오늘(선택한 날짜) 카드
+# 오늘 카드
+weekday_kor = ["월", "화", "수", "목", "금", "토", "일"][sel_day.weekday()]
 st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown(f"## {day_obj.d.isoformat()}  ({['월','화','수','목','금','토','일'][day_obj.d.weekday()]})")
+st.markdown(f"## {sel_day.isoformat()} ({weekday_kor})")
 
 if day_obj.is_sunday:
-    st.markdown("**주일:** 영상 시청")
+    st.markdown("**주일:** 성경 읽기 없음 · 영상만 시청합니다.")
     st.link_button("▶️ 유튜브 바로가기", YOUTUBE_URL)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.session_state.selected_reading = None
 else:
     st.markdown(f"**오늘 읽기:** {day_obj.label}")
+
     # 장별 체크(5장)
     cols = st.columns(5)
     for i, (book, ch) in enumerate(day_obj.chapters):
         k = key_for(book, ch)
-        default_checked = bool(checked_map.get(k, False))
-        new_val = cols[i].checkbox(f"{book} {ch}장", value=default_checked, key=f"chk_{day_obj.d}_{k}")
-        checked_map[k] = new_val
+        st.session_state.checked[k] = cols[i].checkbox(
+            f"{book} {ch}장",
+            value=bool(st.session_state.checked.get(k, False)),
+            key=f"chk_{sel_day}_{k}",
+        )
 
-    # 읽기 버튼: 눌렀을 때 본문 로드 대상으로 설정
-    if st.button("📖 성경 읽기(본문 로드)", use_container_width=True):
+    if st.button("📖 성경 읽기 (본문 로드)", use_container_width=True):
         st.session_state.selected_reading = day_obj.chapters
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# 진행 상태 저장(세션)
-st.session_state.progress["checked"] = checked_map
-st.session_state.progress["updatedAt"] = datetime.now().isoformat(timespec="seconds")
-
-# =========================================================
-# 6) 본문 표시 영역 (읽기 버튼 눌렀을 때만)
-# =========================================================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("본문")
-
-sel_reading: Optional[List[Tuple[str, int]]] = st.session_state.get("selected_reading")
-
-if not sel_reading:
-    st.markdown('<div class="muted">위에서 <b>성경 읽기(본문 로드)</b> 버튼을 누르면, 그날 5장 본문이 여기 표시됩니다.</div>', unsafe_allow_html=True)
-else:
-    # GitHub 연결 점검
-    if not (GITHUB_OWNER and GITHUB_REPO):
-        st.warning("secrets.toml에 GITHUB_OWNER / GITHUB_REPO를 설정해야 본문을 로드할 수 있습니다.")
-    else:
-        with st.spinner("bible_books_json에서 본문을 불러오는 중..."):
-            for (book, ch) in sel_reading:
-                st.markdown(f"### {book} {ch}장")
-                text = load_chapter_text(book, ch)
-                if not text:
-                    st.warning(f"{book} {ch}장 본문을 불러오지 못했습니다. (JSON 구조/경로 확인 필요)")
-                else:
-                    st.text_area(f"{book} {ch}장", value=text, height=260)
 
 st.markdown("</div>", unsafe_allow_html=True)
 
-# =========================================================
-# 7) (선택) 전체 일정 간단 리스트(스크롤)
-# =========================================================
-with st.expander("전체 일정 보기(요약)"):
-    st.caption("2월 1일 ~ 12월 31일 / 주일은 영상, 월~토는 5장")
-    for rd in schedule[:60]:
-        # 너무 길어지니 앞부분만 기본 표시 (원하면 전체도 가능)
-        dow = ['월','화','수','목','금','토','일'][rd.d.weekday()]
-        if rd.is_sunday:
-            st.write(f"{rd.d.isoformat()} ({dow}) - 주일: 영상")
-        else:
-            st.write(f"{rd.d.isoformat()} ({dow}) - {rd.label}")
-    st.caption("※ 전체 출력이 필요하면 이 expander를 전체로 확장하도록 수정해드릴 수 있어요.")
+# 진행률(세션 기준)
+total_ch = len(ALL_CHAPTERS)
+done_ch = sum(1 for v in st.session_state.checked.values() if v)
+
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.markdown(f"### 진행 현황: {done_ch} / {total_ch}장")
+st.progress(min(1.0, done_ch / total_ch))
+st.markdown("</div>", unsafe_allow_html=True)
+
+# 본문 영역
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.subheader("본문")
+
+sel_reading = st.session_state.get("selected_reading")
+if not sel_reading:
+    st.markdown('<div class="muted">위에서 <b>📖 성경 읽기</b> 버튼을 누르면, 오늘 분량(5장)이 여기에 표시됩니다.</div>', unsafe_allow_html=True)
+else:
+    # 로컬 폴더 체크 안내
+    if not LOCAL_BIBLE_BOOKS_DIR.exists():
+        st.warning("bible_books_json 폴더가 repo 루트에 있어야 합니다. (예: bible_books_json/gen.json)")
+    with st.spinner("bible_books_json에서 본문을 불러오는 중..."):
+        for (book, ch) in sel_reading:
+            st.markdown(f"### {book} {ch}장")
+            text = load_chapter_text(book, ch)
+            if not text:
+                st.warning(f"{book} {ch}장 본문을 불러오지 못했습니다. (로컬 파일/JSON 구조/경로 확인 필요)")
+            else:
+                st.text_area(f"{book} {ch}장", value=text, height=260)
+
+st.markdown("</div>", unsafe_allow_html=True)
