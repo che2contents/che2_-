@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+.venv/
+.env
+
+# Streamlit secrets (절대 커밋 금지)
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
