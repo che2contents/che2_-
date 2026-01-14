@@ -8,23 +8,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 import streamlit as st
 
-# =========================================================
-# 기본 설정
-# =========================================================
 st.set_page_config(page_title="인천제2교회 성경읽기표", layout="wide")
 
 YOUTUBE_URL = "https://www.youtube.com/@%EC%9D%B8%EC%B2%9C%EC%A0%9C2%EA%B5%90%ED%9A%8C-che2"
-
 LOCAL_BIBLE_BOOKS_DIR = Path("bible_books_json")
 
-# (선택) GitHub Raw fallback (public repo면 토큰 없어도 됨)
 BIBLE_BOOKS_DIR = st.secrets.get("GITHUB_BIBLE_BOOKS_DIR", "bible_books_json")
 GITHUB_OWNER = st.secrets.get("GITHUB_OWNER", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 GITHUB_BRANCH = st.secrets.get("GITHUB_BRANCH", "main")
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 
-# 책 코드 매핑(호환용)
 BOOKS = {
     "창세기": "gen", "출애굽기": "exo", "레위기": "lev", "민수기": "num", "신명기": "deu",
     "여호수아": "jos", "사사기": "jdg", "룻기": "rut", "사무엘상": "1sa", "사무엘하": "2sa",
@@ -53,9 +47,7 @@ CHAPTER_COUNT = {
 }
 BOOK_ORDER = list(CHAPTER_COUNT.keys())
 
-# =========================================================
-# 스타일(명조) + 배너
-# =========================================================
+# ----------------- 스타일/배너 -----------------
 st.markdown(
     """
     <style>
@@ -77,30 +69,18 @@ except Exception:
     st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
 
 st.title("성경읽기표")
-st.caption("프로토타입: 바로 사용 가능")
+st.caption("1장씩 눌러서 로드하는 버전")
 
-st.info(
-    "📌 사용 방법\n"
-    "- 날짜를 선택하면 그날 읽을 5장이 자동 표시됩니다.\n"
-    "- 평일(월~토)은 [📖 성경 읽기] 버튼으로 본문을 불러옵니다.\n"
-    "- 주일(일)은 [▶️ 유튜브 시청하기]만 표시됩니다."
-)
-
-# =========================================================
-# 세션 상태
-# =========================================================
+# ----------------- 세션 -----------------
 if "checked" not in st.session_state:
-    st.session_state.checked: Dict[str, bool] = {}
-if "selected_reading" not in st.session_state:
-    st.session_state.selected_reading: Optional[List[Tuple[str, int]]] = None
+    st.session_state.checked = {}
+if "selected_single" not in st.session_state:
+    st.session_state.selected_single = None  # (book, ch)
 
 def key_for(book_name: str, chapter: int) -> str:
-    # 체크 키는 코드 기반으로 유지(중복 방지)
     return f"{BOOKS.get(book_name, book_name)}:{chapter:03d}"
 
-# =========================================================
-# 스케줄 생성 (2월~12월 / 월~토 5장 / 주일 영상)
-# =========================================================
+# ----------------- 스케줄 -----------------
 @dataclass
 class ReadingDay:
     d: date
@@ -109,7 +89,7 @@ class ReadingDay:
     label: str
 
 def iter_bible_chapters() -> List[Tuple[str, int]]:
-    out: List[Tuple[str, int]] = []
+    out = []
     for book in BOOK_ORDER:
         for ch in range(1, CHAPTER_COUNT[book] + 1):
             out.append((book, ch))
@@ -120,27 +100,23 @@ ALL_CHAPTERS = iter_bible_chapters()
 def build_schedule(year: int) -> List[ReadingDay]:
     start = date(year, 2, 1)
     end = date(year, 12, 31)
-
-    days: List[date] = []
+    days = []
     cur = start
     while cur <= end:
         days.append(cur)
         cur += timedelta(days=1)
 
     idx = 0
-    schedule: List[ReadingDay] = []
+    schedule = []
     for d in days:
-        is_sun = (d.weekday() == 6)
-        if is_sun:
+        if d.weekday() == 6:
             schedule.append(ReadingDay(d=d, is_sunday=True, chapters=[], label="주일: 영상 시청"))
             continue
-
-        todays: List[Tuple[str, int]] = []
+        todays = []
         for _ in range(5):
             if idx < len(ALL_CHAPTERS):
                 todays.append(ALL_CHAPTERS[idx])
                 idx += 1
-
         if todays:
             b1, c1 = todays[0]
             b2, c2 = todays[-1]
@@ -148,29 +124,18 @@ def build_schedule(year: int) -> List[ReadingDay]:
         else:
             label = "완독 이후(읽기 없음)"
         schedule.append(ReadingDay(d=d, is_sunday=False, chapters=todays, label=label))
-
     return schedule
 
-# =========================================================
-# 본문 로드: ✅ 한글 파일명 우선 (창세기.json)
-#            + 코드 파일명도 호환 (gen.json)
-# =========================================================
+# ----------------- 본문 로드 -----------------
 def github_raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
 
 @st.cache_data(show_spinner=False)
 def load_book_json_local(book_name: str) -> Optional[Dict[str, Any]]:
-    """
-    1) bible_books_json/창세기.json  (현재 사용자 폴더 구조)
-    2) bible_books_json/gen.json     (호환)
-    """
     book_code = BOOKS.get(book_name)
-
-    candidates = []
-    candidates.append(LOCAL_BIBLE_BOOKS_DIR / f"{book_name}.json")
+    candidates = [LOCAL_BIBLE_BOOKS_DIR / f"{book_name}.json"]
     if book_code:
         candidates.append(LOCAL_BIBLE_BOOKS_DIR / f"{book_code}.json")
-
     for fp in candidates:
         if fp.exists():
             try:
@@ -181,27 +146,18 @@ def load_book_json_local(book_name: str) -> Optional[Dict[str, Any]]:
 
 @st.cache_data(show_spinner=False)
 def load_book_json_github(book_name: str) -> Optional[Dict[str, Any]]:
-    """
-    GitHub Raw도 같은 규칙:
-    1) bible_books_json/창세기.json
-    2) bible_books_json/gen.json
-    """
     if not (GITHUB_OWNER and GITHUB_REPO):
         return None
-
     book_code = BOOKS.get(book_name)
     candidates = [f"{BIBLE_BOOKS_DIR}/{book_name}.json"]
     if book_code:
         candidates.append(f"{BIBLE_BOOKS_DIR}/{book_code}.json")
-
     headers = {}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
-
     for rel in candidates:
-        url = github_raw_url(rel)
         try:
-            r = requests.get(url, headers=headers, timeout=25)
+            r = requests.get(github_raw_url(rel), headers=headers, timeout=25)
             if r.status_code == 200:
                 return r.json()
         except Exception:
@@ -224,7 +180,6 @@ def chapter_to_text(node: Any) -> str:
         return ""
     if isinstance(node, str):
         return node
-
     if isinstance(node, list):
         lines = []
         for i, v in enumerate(node, start=1):
@@ -237,7 +192,6 @@ def chapter_to_text(node: Any) -> str:
             else:
                 lines.append(str(v))
         return "\n".join(lines)
-
     if isinstance(node, dict):
         if "text" in node and isinstance(node["text"], str):
             return node["text"]
@@ -245,12 +199,10 @@ def chapter_to_text(node: Any) -> str:
             return chapter_to_text(node["verses"])
         items = sort_verse_items(node)
         return "\n".join([f"{k}. {v}" for k, v in items])
-
     return str(node)
 
 def find_chapter_anywhere(obj: Any, chapter: int) -> Optional[Any]:
     ch_str = str(chapter)
-
     if isinstance(obj, list):
         idx = chapter - 1
         if 0 <= idx < len(obj):
@@ -260,61 +212,43 @@ def find_chapter_anywhere(obj: Any, chapter: int) -> Optional[Any]:
             if found is not None:
                 return found
         return None
-
     if isinstance(obj, dict):
-        direct_keys = [ch_str, chapter, f"ch{ch_str}", f"chapter{ch_str}", f"{ch_str}장"]
-        for k in direct_keys:
+        for k in [ch_str, chapter, f"chapter{ch_str}", f"ch{ch_str}", f"{ch_str}장"]:
             if k in obj:
                 return obj[k]
-
         for wrapper in ["chapters", "chapter", "data", "items", "content", "book"]:
             if wrapper in obj:
                 found = find_chapter_anywhere(obj[wrapper], chapter)
                 if found is not None:
                     return found
-
         for _, v in obj.items():
             found = find_chapter_anywhere(v, chapter)
             if found is not None:
                 return found
-        return None
-
     return None
 
 def get_chapter_node(book_json: Dict[str, Any], chapter: int) -> Optional[Any]:
-    # 빠른 후보
     ch_key = str(chapter)
-    candidates = [
-        ("chapters", ch_key),
-        (None, ch_key),
-        ("data", ch_key),
-    ]
-    for root, ck in candidates:
+    for root, ck in [("chapters", ch_key), (None, ch_key), ("data", ch_key)]:
         try:
             return book_json[ck] if root is None else book_json[root][ck]
         except Exception:
             pass
     return find_chapter_anywhere(book_json, chapter)
 
-def load_chapter_text(book_name: str, chapter: int) -> Tuple[Optional[str], str]:
+def load_chapter_text(book_name: str, chapter: int) -> Optional[str]:
     bj = load_book_json_local(book_name)
-    source = "local" if bj is not None else "none"
     if bj is None:
         bj = load_book_json_github(book_name)
-        source = "github" if bj is not None else "none"
     if bj is None:
-        return None, "none"
-
+        return None
     node = get_chapter_node(bj, chapter)
     if node is None:
-        return None, source
+        return None
+    txt = chapter_to_text(node)
+    return txt if txt.strip() else None
 
-    text = chapter_to_text(node)
-    return (text if text.strip() else None), source
-
-# =========================================================
-# UI: 연도 선택 제거(올해 고정)
-# =========================================================
+# ----------------- UI -----------------
 today = date.today()
 year = today.year
 schedule = build_schedule(year)
@@ -329,7 +263,7 @@ if not day_obj:
     st.error("선택한 날짜 데이터를 찾지 못했습니다.")
     st.stop()
 
-weekday_kor = ["월", "화", "수", "목", "금", "토", "일"][sel_day.weekday()]
+weekday_kor = ["월","화","수","목","금","토","일"][sel_day.weekday()]
 
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown(f"## {sel_day.isoformat()} ({weekday_kor})")
@@ -337,62 +271,42 @@ st.markdown(f"## {sel_day.isoformat()} ({weekday_kor})")
 if day_obj.is_sunday:
     st.markdown("**오늘 읽기:** 주일은 영상 시청")
     st.link_button("▶️ 유튜브 시청하기", YOUTUBE_URL)
-    st.session_state.selected_reading = None
 else:
     st.markdown(f"**오늘 읽기:** {day_obj.label}")
 
-    cols = st.columns(5)
-    for i, (book, ch) in enumerate(day_obj.chapters):
+    # 각 장: 체크 + 읽기 버튼
+    for (book, ch) in day_obj.chapters:
+        row = st.columns([2.2, 1.4, 1.2])
         k = key_for(book, ch)
-        st.session_state.checked[k] = cols[i].checkbox(
-            f"{book} {ch}장",
-            value=bool(st.session_state.checked.get(k, False)),
-            key=f"chk_{sel_day}_{k}",
-        )
-
-    if st.button("📖 성경 읽기 (본문 로드)", use_container_width=True):
-        st.session_state.selected_reading = day_obj.chapters
+        row[0].checkbox(f"{book} {ch}장", value=bool(st.session_state.checked.get(k, False)), key=f"chk_{sel_day}_{k}")
+        if row[1].button("📖 읽기", key=f"read_{sel_day}_{k}", use_container_width=True):
+            st.session_state.selected_single = (book, ch)
+        row[2].markdown("")  # 여백
 
 st.markdown("</div>", unsafe_allow_html=True)
 
-# 진행률(세션)
+# 진행률
 total_ch = len(ALL_CHAPTERS)
 done_ch = sum(1 for v in st.session_state.checked.values() if v)
-
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown(f"### 진행 현황: {done_ch} / {total_ch}장")
 st.progress(min(1.0, done_ch / total_ch))
 st.markdown("</div>", unsafe_allow_html=True)
 
-# 본문 영역
+# 본문: 선택한 1장만 표시
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("본문")
 
-sel_reading: Optional[List[Tuple[str, int]]] = st.session_state.get("selected_reading")
-if not sel_reading:
-    st.markdown('<div class="muted">평일에 <b>📖 성경 읽기</b> 버튼을 누르면 오늘 분량(5장)이 표시됩니다.</div>', unsafe_allow_html=True)
+sel_single = st.session_state.get("selected_single")
+if not sel_single:
+    st.markdown('<div class="muted">오늘 분량 중 <b>📖 읽기</b>를 누른 장만 여기에 표시됩니다.</div>', unsafe_allow_html=True)
 else:
-    if not LOCAL_BIBLE_BOOKS_DIR.exists():
-        st.warning("bible_books_json 폴더가 repo 루트에 있어야 합니다. (예: bible_books_json/창세기.json)")
-    with st.spinner("bible_books_json에서 본문을 불러오는 중..."):
-        for (book, ch) in sel_reading:
-            st.markdown(f"### {book} {ch}장")
-            text, src = load_chapter_text(book, ch)
-            if not text:
-                st.warning(f"{book} {ch}장 본문을 불러오지 못했습니다. (source={src})")
-            else:
-                st.caption(f"로드 소스: {src}")
-                st.text_area(f"{book} {ch}장", value=text, height=260)
+    book, ch = sel_single
+    st.markdown(f"### {book} {ch}장")
+    txt = load_chapter_text(book, ch)
+    if not txt:
+        st.warning(f"{book} {ch}장 본문을 불러오지 못했습니다. (JSON 구조 확인 필요)")
+    else:
+        st.text_area(f"{book} {ch}장", value=txt, height=520)
 
 st.markdown("</div>", unsafe_allow_html=True)
-
-# 디버그(필요 시 확인)
-with st.expander("디버그(본문 로드 확인)"):
-    st.write("로컬 폴더 존재 여부:", LOCAL_BIBLE_BOOKS_DIR.exists())
-    if LOCAL_BIBLE_BOOKS_DIR.exists():
-        files = sorted([p.name for p in LOCAL_BIBLE_BOOKS_DIR.glob("*.json")])
-        st.write("로컬 json 파일 개수:", len(files))
-        st.write("예시 파일(앞 15개):", files[:15])
-        # 창세기 파일 존재 여부
-        st.write("창세기.json 존재:", (LOCAL_BIBLE_BOOKS_DIR / "창세기.json").exists())
-        st.write("gen.json 존재(호환):", (LOCAL_BIBLE_BOOKS_DIR / "gen.json").exists())
