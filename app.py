@@ -50,33 +50,6 @@ CHAPTER_COUNT = {
 }
 BOOK_ORDER = list(CHAPTER_COUNT.keys())
 
-# =========================================================
-# 스타일(명조) + 배너
-# =========================================================
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&display=swap');
-    html, body, [class*="css"] { font-family: 'Nanum Myeongjo', serif !important; }
-
-    .banner-wrap img { border-radius: 14px; }
-    .muted { color:#666; font-size:0.95rem; }
-    .card { border:1px solid #e6e6e6; border-radius:14px; padding:14px; background:#fff; margin-bottom:12px; }
-
-    /* 모바일에서 버튼/체크박스 간격 넉넉하게 */
-    button[kind="primary"], button[kind="secondary"] { padding: 0.6rem 0.9rem !important; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-try:
-    st.markdown('<div class="banner-wrap">', unsafe_allow_html=True)
-    st.image("assets/banner.jpg", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-except Exception:
-    st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
-
 st.title("성경읽기표")
 st.caption("모바일 최적: 읽기표 화면 ↔ 본문 화면 전환")
 
