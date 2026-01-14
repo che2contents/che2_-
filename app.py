@@ -76,7 +76,7 @@ try:
 except Exception:
     st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
 
-st.title("성경읽기표 (2월~12월 · 월~토 5장 · 주일 영상)")
+st.title("성경읽기표")
 st.caption("프로토타입: 코드/백업 숨김 · 바로 사용")
 
 # =========================================================
