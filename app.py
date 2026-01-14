@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 import streamlit as st
 
+# =========================================================
+# 기본 설정
+# =========================================================
 st.set_page_config(page_title="인천제2교회 성경읽기표", layout="wide")
 
 YOUTUBE_URL = "https://www.youtube.com/@%EC%9D%B8%EC%B2%9C%EC%A0%9C2%EA%B5%90%ED%9A%8C-che2"
@@ -47,15 +50,21 @@ CHAPTER_COUNT = {
 }
 BOOK_ORDER = list(CHAPTER_COUNT.keys())
 
-# ----------------- 스타일/배너 -----------------
+# =========================================================
+# 스타일(명조) + 배너
+# =========================================================
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&display=swap');
     html, body, [class*="css"] { font-family: 'Nanum Myeongjo', serif !important; }
+
     .banner-wrap img { border-radius: 14px; }
     .muted { color:#666; font-size:0.95rem; }
     .card { border:1px solid #e6e6e6; border-radius:14px; padding:14px; background:#fff; margin-bottom:12px; }
+
+    /* 모바일에서 버튼/체크박스 간격 넉넉하게 */
+    button[kind="primary"], button[kind="secondary"] { padding: 0.6rem 0.9rem !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -69,18 +78,26 @@ except Exception:
     st.warning("assets/banner.jpg 배너 파일을 repo에 추가해 주세요.")
 
 st.title("성경읽기표")
-st.caption("1장씩 눌러서 로드하는 버전")
+st.caption("모바일 최적: 읽기표 화면 ↔ 본문 화면 전환")
 
-# ----------------- 세션 -----------------
+# =========================================================
+# 세션 상태
+# =========================================================
 if "checked" not in st.session_state:
-    st.session_state.checked = {}
-if "selected_single" not in st.session_state:
-    st.session_state.selected_single = None  # (book, ch)
+    st.session_state.checked = {}  # { "gen:001": True, ... }
+if "view" not in st.session_state:
+    st.session_state.view = "plan"  # "plan" | "read"
+if "selected_day" not in st.session_state:
+    st.session_state.selected_day = None
+if "selected_chapter" not in st.session_state:
+    st.session_state.selected_chapter = None  # (book, ch)
 
 def key_for(book_name: str, chapter: int) -> str:
     return f"{BOOKS.get(book_name, book_name)}:{chapter:03d}"
 
-# ----------------- 스케줄 -----------------
+# =========================================================
+# 스케줄
+# =========================================================
 @dataclass
 class ReadingDay:
     d: date
@@ -112,21 +129,26 @@ def build_schedule(year: int) -> List[ReadingDay]:
         if d.weekday() == 6:
             schedule.append(ReadingDay(d=d, is_sunday=True, chapters=[], label="주일: 영상 시청"))
             continue
+
         todays = []
         for _ in range(5):
             if idx < len(ALL_CHAPTERS):
                 todays.append(ALL_CHAPTERS[idx])
                 idx += 1
+
         if todays:
             b1, c1 = todays[0]
             b2, c2 = todays[-1]
             label = f"{b1} {c1}–{c2}장" if b1 == b2 else f"{b1} {c1}장 ~ {b2} {c2}장"
         else:
             label = "완독 이후(읽기 없음)"
+
         schedule.append(ReadingDay(d=d, is_sunday=False, chapters=todays, label=label))
     return schedule
 
-# ----------------- 본문 로드 -----------------
+# =========================================================
+# 본문 로드 (한글 파일명 우선)
+# =========================================================
 def github_raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
 
@@ -248,65 +270,100 @@ def load_chapter_text(book_name: str, chapter: int) -> Optional[str]:
     txt = chapter_to_text(node)
     return txt if txt.strip() else None
 
-# ----------------- UI -----------------
-today = date.today()
-year = today.year
-schedule = build_schedule(year)
+# =========================================================
+# View: PLAN (읽기표 화면)
+# =========================================================
+def render_plan_view():
+    today = date.today()
+    year = today.year
+    schedule = build_schedule(year)
 
-min_day = date(year, 2, 1)
-max_day = date(year, 12, 31)
-default_day = today if (min_day <= today <= max_day) else min_day
+    min_day = date(year, 2, 1)
+    max_day = date(year, 12, 31)
+    default_day = today if (min_day <= today <= max_day) else min_day
 
-sel_day = st.date_input("날짜 선택", value=default_day, min_value=min_day, max_value=max_day)
-day_obj = next((x for x in schedule if x.d == sel_day), None)
-if not day_obj:
-    st.error("선택한 날짜 데이터를 찾지 못했습니다.")
-    st.stop()
+    if st.session_state.selected_day:
+        default_day = st.session_state.selected_day
 
-weekday_kor = ["월","화","수","목","금","토","일"][sel_day.weekday()]
+    st.info("📌 날짜를 선택하면 ‘오늘 분량’이 보입니다. 읽을 장에서 **📖 읽기**를 누르면 본문 화면으로 이동합니다.")
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown(f"## {sel_day.isoformat()} ({weekday_kor})")
+    sel_day = st.date_input("날짜 선택", value=default_day, min_value=min_day, max_value=max_day)
+    st.session_state.selected_day = sel_day
 
-if day_obj.is_sunday:
-    st.markdown("**오늘 읽기:** 주일은 영상 시청")
-    st.link_button("▶️ 유튜브 시청하기", YOUTUBE_URL)
-else:
+    day_obj = next((x for x in schedule if x.d == sel_day), None)
+    if not day_obj:
+        st.error("선택한 날짜 데이터를 찾지 못했습니다.")
+        return
+
+    weekday_kor = ["월","화","수","목","금","토","일"][sel_day.weekday()]
+    st.markdown(f"### {sel_day.isoformat()} ({weekday_kor})")
+
+    if day_obj.is_sunday:
+        st.markdown("**오늘 읽기:** 주일은 영상 시청")
+        st.link_button("▶️ 유튜브 시청하기", YOUTUBE_URL)
+        return
+
     st.markdown(f"**오늘 읽기:** {day_obj.label}")
 
-    # 각 장: 체크 + 읽기 버튼
+    # 모바일 최적: 각 장은 세로로 한 줄씩 (체크 + 읽기 버튼)
     for (book, ch) in day_obj.chapters:
-        row = st.columns([2.2, 1.4, 1.2])
         k = key_for(book, ch)
-        row[0].checkbox(f"{book} {ch}장", value=bool(st.session_state.checked.get(k, False)), key=f"chk_{sel_day}_{k}")
+        row = st.columns([2.0, 1.2])
+        row[0].checkbox(
+            f"{book} {ch}장",
+            value=bool(st.session_state.checked.get(k, False)),
+            key=f"chk_{sel_day}_{k}"
+        )
         if row[1].button("📖 읽기", key=f"read_{sel_day}_{k}", use_container_width=True):
-            st.session_state.selected_single = (book, ch)
-        row[2].markdown("")  # 여백
+            st.session_state.selected_chapter = (book, ch)
+            st.session_state.view = "read"
+            st.rerun()
 
-st.markdown("</div>", unsafe_allow_html=True)
+    # 진행률은 plan 화면 맨 아래에만 간단히
+    total_ch = len(ALL_CHAPTERS)
+    done_ch = sum(1 for v in st.session_state.checked.values() if v)
+    st.caption(f"진행 현황: {done_ch}/{total_ch}장")
 
-# 진행률
-total_ch = len(ALL_CHAPTERS)
-done_ch = sum(1 for v in st.session_state.checked.values() if v)
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown(f"### 진행 현황: {done_ch} / {total_ch}장")
-st.progress(min(1.0, done_ch / total_ch))
-st.markdown("</div>", unsafe_allow_html=True)
+# =========================================================
+# View: READ (본문 화면)
+# =========================================================
+def render_read_view():
+    # 상단 "뒤로가기"
+    top = st.columns([1.0, 2.0])
+    if top[0].button("← 뒤로가기", use_container_width=True):
+        st.session_state.view = "plan"
+        st.rerun()
 
-# 본문: 선택한 1장만 표시
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("본문")
+    sel = st.session_state.get("selected_chapter")
+    if not sel:
+        st.session_state.view = "plan"
+        st.rerun()
+        return
 
-sel_single = st.session_state.get("selected_single")
-if not sel_single:
-    st.markdown('<div class="muted">오늘 분량 중 <b>📖 읽기</b>를 누른 장만 여기에 표시됩니다.</div>', unsafe_allow_html=True)
-else:
-    book, ch = sel_single
-    st.markdown(f"### {book} {ch}장")
-    txt = load_chapter_text(book, ch)
+    book, ch = sel
+    st.markdown(f"## {book} {ch}장")
+
+    with st.spinner("본문을 불러오는 중..."):
+        txt = load_chapter_text(book, ch)
+
     if not txt:
         st.warning(f"{book} {ch}장 본문을 불러오지 못했습니다. (JSON 구조 확인 필요)")
-    else:
-        st.text_area(f"{book} {ch}장", value=txt, height=520)
+        return
 
-st.markdown("</div>", unsafe_allow_html=True)
+    # 모바일에서 text_area는 스크롤이 길어져서 불편할 수 있어
+    # 본문은 markdown으로 출력(절 번호가 있으면 그대로 보이게)
+    st.markdown("----")
+    st.markdown(
+        "<div style='white-space:pre-wrap; line-height:1.8; font-size:1.05rem;'>"
+        + (txt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        + "</div>",
+        unsafe_allow_html=True
+    )
+
+# =========================================================
+# 렌더링
+# =========================================================
+if st.session_state.view == "read":
+    render_read_view()
+else:
+    render_plan_view()
